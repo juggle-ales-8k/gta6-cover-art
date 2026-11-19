@@ -1,51 +1,83 @@
-// Wires the page: pick a photo, type a caption, export the square cover as a PNG. A `?shot=` query sets up a fixed
-// scene for a screenshot instead (./shots.js).
-import { drawCover } from './cover.js';
-import { runShot } from './shots.js';
+// Application entry point: boots either a headless screenshot scene (?shot=cover|editor)
+// or the full interactive Vice Cover editor pre-populated with sample photos.
 
-const canvas = document.getElementById('cover');
-const caption = document.getElementById('caption');
-const status = document.getElementById('status');
-let photo = null;
+import { SIZES } from './layout.js';
+import { renderPoster } from './render.js';
+import { createInitialState, initEditor, loadSamplePhotos } from './editor.js';
 
-function redraw() {
-  drawCover(canvas, photo, caption.value);
+function applyQueryParams(state, params) {
+  const size = params.get('size');
+  if (size && SIZES[size]) state.size = size;
+
+  const grade = params.get('grade');
+  if (grade && ['sunset', 'neon', 'noir', 'gold'].includes(grade)) {
+    state.grade = grade;
+  }
+
+  const layout = params.get('layout');
+  if (layout && ['hero', 'grid', 'strip'].includes(layout)) {
+    state.layout = layout;
+  }
+
+  const lettering = params.get('lettering');
+  if (lettering && ['block', 'chrome', 'neon'].includes(lettering)) {
+    state.lettering = lettering;
+  }
+
+  const caption = params.get('caption');
+  if (caption !== null) {
+    state.caption = caption.slice(0, 40);
+  }
+
+  const subtitle = params.get('subtitle');
+  if (subtitle !== null) {
+    state.subtitle = subtitle.slice(0, 40);
+  }
+
+  const seedParam = params.get('seed');
+  if (seedParam !== null && Number.isFinite(Number(seedParam))) {
+    state.seed = Math.abs(Math.trunc(Number(seedParam))) || 1986;
+  }
 }
 
-/** Loads an image from a URL, resolving to the image once it can be drawn. */
-export function loadImage(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = reject;
-    img.src = url;
+function signalShotReady() {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.__shotReady = true;
+    });
   });
 }
 
-document.getElementById('photo').addEventListener('change', async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  photo = await loadImage(URL.createObjectURL(file));
-  redraw();
-});
-caption.addEventListener('input', redraw);
-document.getElementById('export').addEventListener('click', () => {
-  canvas.toBlob((blob) => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'cover-1080x1080.png';
-    a.click();
-    status.textContent = 'Saved cover-1080x1080.png';
-  }, 'image/png');
-});
+async function boot() {
+  const params = new URLSearchParams(window.location.search);
+  const shot = params.get('shot');
+  const state = createInitialState();
 
-const shot = new URLSearchParams(location.search).get('shot');
-if (shot) {
-  runShot(shot, new URLSearchParams(location.search), async (sample, text) => {
-    photo = await loadImage(sample);
-    caption.value = text;
-    redraw();
-  });
-} else {
-  redraw();
+  applyQueryParams(state, params);
+  await loadSamplePhotos(state);
+
+  if (shot === 'cover') {
+    document.body.classList.add('shot-cover');
+    const canvas = document.getElementById('poster-canvas');
+    const spec = SIZES[state.size] ?? SIZES.tall;
+    canvas.width = spec.w;
+    canvas.height = spec.h;
+    renderPoster(canvas, state, { showSelection: false });
+    signalShotReady();
+    return;
+  }
+
+  if (shot === 'editor') {
+    document.body.classList.add('shot-editor');
+    const editor = initEditor(state, { isShotMode: false });
+    editor.syncControlsFromState();
+    editor.renderNow();
+    signalShotReady();
+    return;
+  }
+
+  // Normal interactive launch
+  initEditor(state, { isShotMode: false });
 }
+
+boot();
